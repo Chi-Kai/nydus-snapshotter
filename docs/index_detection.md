@@ -32,6 +32,24 @@ Both `platform.os.features` and `artifactType` are looked at because index manif
 
 When both Index Detection and Referrer Detection are available, Index Detection takes priority due to its superior supply chain security properties.
 
+## Shared OCI layers
+
+Index detection skips OCI layer extraction. A full Nydus bootstrap can therefore
+only be mounted at the snapshot corresponding to the source image's final layer.
+An ordinary OCI image extending that complete image can reuse the mount. An image
+sharing only an intermediate prefix cannot: mounting the full bootstrap would
+expose files from unrelated upper layers.
+
+Such prefixes now fail with `FailedPrecondition`, including during OCI child
+extraction, container preparation, read-only views and `Mounts`. Missing or
+inconsistent layer annotations also fail rather than falling back to empty
+snapshot directories. This check does not reconstruct the skipped OCI layers.
+
+Disabling index detection does not restore existing placeholders. Release the
+affected container/image references and let containerd remove the unused
+snapshots before repulling without index detection, or use a separate ordinary
+OCI snapshotter. Existing running containers are not repaired by this check.
+
 ## Configuration
 
 Index Detection is controlled by the `EnableIndexDetect` configuration option in the experimental features section:

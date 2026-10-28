@@ -17,6 +17,7 @@ import (
 	"github.com/containerd/containerd/v2/core/snapshots/storage"
 	snpkg "github.com/containerd/containerd/v2/pkg/snapshotters"
 	"github.com/containerd/nydus-snapshotter/config"
+	"github.com/containerd/nydus-snapshotter/pkg/errdefs"
 	"github.com/containerd/nydus-snapshotter/pkg/label"
 	"github.com/containerd/nydus-snapshotter/pkg/snapshot"
 )
@@ -31,6 +32,16 @@ func chooseProcessor(ctx context.Context, logger *logrus.Entry,
 
 	// Handler to prepare a directory for containerd to download and unpacking layer.
 	defaultHandler := func() (bool, []mount.Mount, error) {
+		if parent != "" {
+			id, info, err := sn.findIndexAlternativeLayer(ctx, parent)
+			if err == nil {
+				mounts, err := sn.mountIndexAlternative(ctx, s, key, id, info, labels)
+				return false, mounts, err
+			}
+			if !errors.Is(err, errdefs.ErrNotFound) {
+				return false, nil, err
+			}
+		}
 		mounts, err := sn.mountNative(ctx, labels, s)
 		return false, mounts, err
 	}
@@ -157,14 +168,15 @@ func chooseProcessor(ctx context.Context, logger *logrus.Entry,
 			}
 		}
 
-		if handler == nil && sn.fs.IndexDetectEnabled() {
+		if handler == nil {
 			if id, info, err := sn.findIndexAlternativeLayer(ctx, key); err == nil {
 				logger.Infof("Found nydus alternative image in index for image: %s", info.Labels[snpkg.TargetRefLabel])
-				metaPath := path.Join(sn.snapshotDir(id), "fs", "image.boot")
-				if err := sn.fs.TryFetchMetadataFromIndex(ctx, info.Labels, metaPath); err != nil {
-					return nil, "", nil, errors.Wrap(err, "try fetch metadata")
+				handler = func() (bool, []mount.Mount, error) {
+					mounts, err := sn.mountIndexAlternative(ctx, s, key, id, info, labels)
+					return false, mounts, err
 				}
-				handler = remoteHandler(id, info.Labels)
+			} else if !errors.Is(err, errdefs.ErrNotFound) {
+				return nil, "", nil, err
 			}
 		}
 

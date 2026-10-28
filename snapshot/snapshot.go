@@ -484,10 +484,12 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 	case snapshots.KindUnknown:
 	}
 
-	if o.fs.IndexDetectEnabled() && !needRemoteMounts {
+	if !needRemoteMounts {
 		if id, _, err := o.findIndexAlternativeLayer(ctx, key); err == nil {
 			needRemoteMounts = true
 			metaSnapshotID = id
+		} else if !errors.Is(err, errdefs.ErrNotFound) {
+			return nil, err
 		}
 	}
 
@@ -586,10 +588,21 @@ func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 		return nil, errors.New("only can view nydus topmost layer")
 	}
 	// Otherwise, it is OCI snapshots
+	var indexID string
+	var indexInfo snapshots.Info
+	if !needRemoteMounts {
+		indexID, indexInfo, err = o.findIndexAlternativeLayer(ctx, parent)
+		if err != nil && !errors.Is(err, errdefs.ErrNotFound) {
+			return nil, err
+		}
+	}
 
 	base, s, err := o.createSnapshot(ctx, snapshots.KindView, key, parent, opts)
 	if err != nil {
 		return nil, err
+	}
+	if indexID != "" {
+		return o.mountIndexAlternative(ctx, s, key, indexID, indexInfo, base.Labels)
 	}
 
 	if o.fs.TarfsEnabled() && label.IsTarfsDataLayer(pInfo.Labels) {
@@ -800,12 +813,6 @@ func (o *snapshotter) lowerPath(id string) (mnt string, err error) {
 
 func (o *snapshotter) workPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "work")
-}
-
-func (o *snapshotter) findIndexAlternativeLayer(ctx context.Context, key string) (string, snapshots.Info, error) {
-	return snapshot.IterateParentSnapshots(ctx, o.ms, key, func(_ string, i snapshots.Info) bool {
-		return o.fs.CheckIndexAlternative(ctx, i.Labels)
-	})
 }
 
 func (o *snapshotter) findReferrerLayer(ctx context.Context, key string) (string, snapshots.Info, error) {
